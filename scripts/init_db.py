@@ -1,6 +1,8 @@
-from __future__ import annotations
-
+import sys
 from pathlib import Path
+
+# Add project root to sys.path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from backend.config import get_settings
 from backend.database import get_connection
@@ -54,9 +56,9 @@ def seed_if_needed(sandbox: bool = False) -> dict[str, int]:
                 SELECT gs,
                        'Customer ' || gs,
                        'user' || gs || '@example.com',
-                       '555-01' || lpad((gs % 10000)::text, 4, '0'),
+                       '555-01' || lpad(mod(gs, 10000)::text, 4, '0'),
                        gs || ' Demo Street',
-                       NOW() - ((gs % 800) || ' days')::interval
+                       NOW() - (mod(gs, 800) || ' days')::interval
                 FROM generate_series(1, %s) gs
                 """,
                 (c,),
@@ -67,8 +69,8 @@ def seed_if_needed(sandbox: bool = False) -> dict[str, int]:
                 SELECT gs,
                        'SKU-' || gs,
                        'Product ' || gs,
-                       (ARRAY['electronics','home','grocery','fashion','sports'])[1 + (gs % 5)],
-                       (5 + (gs % 490))::numeric
+                       (ARRAY['electronics','home','grocery','fashion','sports'])[1 + mod(gs, 5)],
+                       (5 + mod(gs, 490))::numeric
                 FROM generate_series(1, %s) gs
                 """,
                 (p,),
@@ -77,10 +79,10 @@ def seed_if_needed(sandbox: bool = False) -> dict[str, int]:
                 """
                 INSERT INTO orders (order_id, customer_id, amount, status, created_at)
                 SELECT gs,
-                       1 + ((gs * 1103515245 + 12345) % %s),
-                       (10 + (gs % 990))::numeric,
-                       (ARRAY['open','paid','shipped','cancelled'])[1 + (gs % 4)],
-                       NOW() - ((gs % 400) || ' days')::interval
+                       1 + mod(abs(gs::bigint * 1103515245 + 12345)::bigint, %s::bigint),
+                       (10 + mod(gs, 990))::numeric,
+                       (ARRAY['open','paid','shipped','cancelled'])[1 + mod(gs, 4)],
+                       NOW() - (mod(gs, 400) || ' days')::interval
                 FROM generate_series(1, %s) gs
                 """,
                 (c, o),
@@ -89,10 +91,10 @@ def seed_if_needed(sandbox: bool = False) -> dict[str, int]:
                 """
                 INSERT INTO order_items (order_item_id, order_id, product_id, quantity, unit_price)
                 SELECT gs,
-                       1 + ((gs * 2654435761) % %s),
-                       1 + ((gs * 2246822519) % %s),
-                       1 + (gs % 5),
-                       (5 + (gs % 200))::numeric
+                       1 + mod(abs(gs::bigint * 2654435761)::bigint, %s::bigint),
+                       1 + mod(abs(gs::bigint * 2246822519)::bigint, %s::bigint),
+                       1 + mod(gs, 5),
+                       (5 + mod(gs, 200))::numeric
                 FROM generate_series(1, %s) gs
                 """,
                 (o, p, items),
@@ -101,10 +103,10 @@ def seed_if_needed(sandbox: bool = False) -> dict[str, int]:
                 """
                 INSERT INTO transactions (transaction_id, customer_id, amount, method, created_at)
                 SELECT gs,
-                       1 + ((gs * 1664525 + 1013904223) % %s),
-                       (5 + (gs % 800))::numeric,
-                       (ARRAY['card','ach','wallet','cash'])[1 + (gs % 4)],
-                       NOW() - ((gs % 360) || ' days')::interval
+                       1 + mod(abs(gs::bigint * 1664525 + 1013904223)::bigint, %s::bigint),
+                       (5 + mod(gs, 800))::numeric,
+                       (ARRAY['card','ach','wallet','cash'])[1 + mod(gs, 4)],
+                       NOW() - (mod(gs, 360) || ' days')::interval
                 FROM generate_series(1, %s) gs
                 """,
                 (c, t),

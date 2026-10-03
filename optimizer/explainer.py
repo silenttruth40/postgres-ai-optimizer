@@ -15,8 +15,13 @@ def _explain_with_gemini(
     anonymizer: Anonymizer,
     benchmark: dict | None,
 ) -> str | None:
+    import os
+    import logging
+
+    logger = logging.getLogger("optimizer.explainer")
     settings = get_settings()
-    if not settings.gemini_api_key:
+    api_key = (settings.gemini_api_key or os.environ.get("GEMINI_API_KEY") or "").strip()
+    if not api_key:
         return None
     try:
         import httpx
@@ -25,7 +30,7 @@ def _explain_with_gemini(
         anon_table = anonymizer.table_token(candidate.table) if candidate.table else "table_target"
         anon_cols = [anonymizer.column_token(c) for c in candidate.columns]
         improvement = benchmark.get("improvement_percent") if benchmark else None
-        imp_str = f"{improvement:.1f}% measured speedup" if improvement is not None else "simulated improvement"
+        imp_str = f"{improvement:.1f}% measured speedup" if improvement is not None else "analyzed plan optimization"
 
         prompt = (
             f"You are a PostgreSQL database optimization AI. "
@@ -39,15 +44,20 @@ def _explain_with_gemini(
             f"Use the tokenized table and column identifiers exactly as provided."
         )
 
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{settings.gemini_model}:generateContent?key={settings.gemini_api_key}"
-        res = httpx.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=10.0)
+        model = settings.gemini_model or "gemini-1.5-flash"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+        res = httpx.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=12.0)
         if res.status_code == 200:
             data = res.json()
-            raw_text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-            # Reverse-map / re-hash Gemini's tokenized response back to the user's real schema
-            return anonymizer.deanonymize_text(raw_text)
-    except Exception:
-        pass
+            candidates_list = data.get("candidates", [])
+            if candidates_list and "content" in candidates_list[0]:
+                raw_text = candidates_list[0]["content"]["parts"][0]["text"].strip()
+                # Reverse-map / re-hash Gemini's tokenized response back to the user's real schema
+                return anonymizer.deanonymize_text(raw_text)
+        else:
+            logger.warning("Gemini API returned status %s: %s", res.status_code, res.text[:200])
+    except Exception as exc:
+        logger.warning("Gemini API call failed: %s", exc)
     return None
 
 

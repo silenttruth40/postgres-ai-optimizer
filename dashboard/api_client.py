@@ -64,3 +64,9 @@ class OptimizerClient:
     def privacy_demo(self) -> dict:
         return self._request("GET", "/privacy/demo")
 
+    def set_gemini_key(self, api_key: str, model: str | None = None) -> dict:
+        payload = {"api_key": api_key}
+        if model:
+            payload["model"] = model
+        return self._request("POST", "/config/gemini", payload)
+

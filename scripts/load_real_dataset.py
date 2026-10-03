@@ -62,10 +62,10 @@ def generate_realistic_dataset(conn, target_orders: int = 100_000) -> dict[str, 
             SELECT
                 gs,
                 'Customer ' || gs,
-                'user' || gs || '@' || (ARRAY['gmail.com', 'enterprise.corp', 'yahoo.com', 'outlook.com', 'company.org'])[1 + (gs % 5)],
-                '+1-555-' || lpad((gs % 10000)::text, 4, '0'),
-                (100 + (gs % 9000)) || ' Market Boulevard, Suite ' || (gs % 50),
-                NOW() - ((gs % 1200) || ' days')::interval
+                'user' || gs || '@' || (ARRAY['gmail.com', 'enterprise.corp', 'yahoo.com', 'outlook.com', 'company.org'])[1 + mod(gs, 5)],
+                '+1-555-' || lpad(mod(gs, 10000)::text, 4, '0'),
+                (100 + mod(gs, 9000)) || ' Market Boulevard, Suite ' || mod(gs, 50),
+                NOW() - (mod(gs, 1200) || ' days')::interval
             FROM generate_series(1, %s) gs;
             """,
             (num_customers,),
@@ -80,8 +80,8 @@ def generate_realistic_dataset(conn, target_orders: int = 100_000) -> dict[str, 
                 gs,
                 'SKU-' || upper(substring(md5(gs::text) from 1 for 8)),
                 'Product ' || gs,
-                (ARRAY['electronics', 'cloud_services', 'hardware', 'office_supplies', 'apparel'])[1 + (gs % 5)],
-                ROUND((15.0 + (gs % 1200)::numeric * 1.35), 2)
+                (ARRAY['electronics', 'cloud_services', 'hardware', 'office_supplies', 'apparel'])[1 + mod(gs, 5)],
+                ROUND((15.0 + mod(gs, 1200)::numeric * 1.35), 2)
             FROM generate_series(1, %s) gs;
             """,
             (num_products,),
@@ -94,14 +94,13 @@ def generate_realistic_dataset(conn, target_orders: int = 100_000) -> dict[str, 
             INSERT INTO orders (order_id, customer_id, amount, status, created_at)
             SELECT
                 gs,
-                -- 80% of orders come from the top 20% of customers (realistic skew)
                 CASE
-                    WHEN (gs % 5) != 0 THEN 1 + ((gs * 1103515245 + 12345) % (GREATEST(%s / 5, 1)))
-                    ELSE 1 + ((gs * 1103515245 + 12345) % %s)
+                    WHEN mod(gs, 5) != 0 THEN 1 + mod(abs(gs::bigint * 1103515245 + 12345)::bigint, GREATEST(%s / 5, 1))
+                    ELSE 1 + mod(abs(gs::bigint * 1103515245 + 12345)::bigint, %s)
                 END,
-                ROUND((20.0 + ((gs * 7919) % 2500)::numeric), 2),
-                (ARRAY['paid', 'open', 'shipped', 'cancelled', 'refunded'])[1 + (gs % 5)],
-                NOW() - ((gs % 730) || ' days')::interval - ((gs % 86400) || ' seconds')::interval
+                ROUND((20.0 + mod(abs(gs::bigint * 7919), 2500)::numeric), 2),
+                (ARRAY['paid', 'open', 'shipped', 'cancelled', 'refunded'])[1 + mod(gs, 5)],
+                NOW() - (mod(gs, 730) || ' days')::interval - (mod(gs, 86400) || ' seconds')::interval
             FROM generate_series(1, %s) gs;
             """,
             (num_customers, num_customers, num_orders),
@@ -114,10 +113,10 @@ def generate_realistic_dataset(conn, target_orders: int = 100_000) -> dict[str, 
             INSERT INTO order_items (order_item_id, order_id, product_id, quantity, unit_price)
             SELECT
                 gs,
-                1 + ((gs * 2654435761) % %s),
-                1 + ((gs * 2246822519) % %s),
-                1 + (gs % 6),
-                ROUND((10.0 + (gs % 350)::numeric), 2)
+                1 + mod(abs(gs::bigint * 2654435761)::bigint, %s),
+                1 + mod(abs(gs::bigint * 2246822519)::bigint, %s),
+                1 + mod(gs, 6),
+                ROUND((10.0 + mod(gs, 350)::numeric), 2)
             FROM generate_series(1, %s) gs;
             """,
             (num_orders, num_products, num_items),
@@ -130,10 +129,10 @@ def generate_realistic_dataset(conn, target_orders: int = 100_000) -> dict[str, 
             INSERT INTO transactions (transaction_id, customer_id, amount, method, created_at)
             SELECT
                 gs,
-                1 + ((gs * 1664525 + 1013904223) % %s),
-                ROUND((15.0 + (gs % 2400)::numeric), 2),
-                (ARRAY['credit_card', 'wire_transfer', 'ach', 'corporate_wallet'])[1 + (gs % 4)],
-                NOW() - ((gs % 700) || ' days')::interval
+                1 + mod(abs(gs::bigint * 1664525 + 1013904223)::bigint, %s),
+                ROUND((15.0 + mod(gs, 2400)::numeric), 2),
+                (ARRAY['credit_card', 'wire_transfer', 'ach', 'corporate_wallet'])[1 + mod(gs, 4)],
+                NOW() - (mod(gs, 700) || ' days')::interval
             FROM generate_series(1, %s) gs;
             """,
             (num_customers, num_txns),

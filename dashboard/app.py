@@ -1,17 +1,42 @@
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+# Automatically ensure project root is in sys.path
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 import streamlit as st
 
-from dashboard.api_client import APIError, OptimizerClient
-from dashboard.components import (
-    CSS,
-    bottleneck_cards,
-    candidate_card,
-    performance_matrix_card,
-)
+try:
+    from dashboard.api_client import APIError, OptimizerClient
+    from dashboard.components import (
+        CSS,
+        ai_explanation_card,
+        bottleneck_cards,
+        candidate_card,
+        performance_matrix_card,
+    )
+except ModuleNotFoundError:
+    from api_client import APIError, OptimizerClient
+    from components import (
+        CSS,
+        ai_explanation_card,
+        bottleneck_cards,
+        candidate_card,
+        performance_matrix_card,
+    )
+
+try:
+    from streamlit_ace import st_ace
+    HAS_ACE = True
+except ImportError:
+    HAS_ACE = False
 
 st.set_page_config(
-    page_title="PostgreSQL AI Optimizer",
+    page_title="PostgreSQL AI Performance Optimizer",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -21,13 +46,13 @@ st.markdown(CSS, unsafe_allow_html=True)
 
 client = OptimizerClient()
 
-# Top Navigation / Title
+# Top Navigation / Title - Clean, unclipped hero header
 st.markdown(
     """
 <div class="top-header">
   <div>
-    <div class="top-title">PostgreSQL AI Performance Optimizer</div>
-    <div class="top-subtitle">Zero-Data Exposure · Graph Neural Networks · Reinforcement Learning · Sandbox Validation</div>
+    <div class="top-title">⚡ PostgreSQL AI Performance Optimizer</div>
+    <div class="top-subtitle">PostgreSQL Query Optimization · Automated Index Recommendations · Live Benchmark Validation</div>
   </div>
 </div>
 """,
@@ -77,6 +102,10 @@ with st.sidebar:
         st.caption(selected["description"])
         active_sql = selected["sql"]
         active_id = query_id
+        
+        # Show code preview of preset query
+        with st.expander("View SQL Statement", expanded=False):
+            st.code(active_sql, language="sql")
     else:
         active_id = "custom"
         default_custom = """SELECT c.customer_id, c.name, COUNT(o.order_id) AS total_orders
@@ -86,31 +115,70 @@ WHERE o.created_at >= CURRENT_DATE - INTERVAL '60 days'
   AND o.amount > 100
 GROUP BY c.customer_id, c.name
 ORDER BY total_orders DESC;"""
-        active_sql = st.text_area(
-            "Enter SQL statement (SELECT / CTE)",
-            value=default_custom,
-            height=160,
-        )
+
+        st.markdown("**Enter SQL query below:**")
+        if HAS_ACE:
+            active_sql = st_ace(
+                value=default_custom,
+                language="sql",
+                theme="monokai",
+                keybinding="vscode",
+                font_size=13,
+                tab_size=2,
+                min_lines=10,
+                max_lines=26,
+                show_gutter=True,
+                show_print_margin=False,
+                wrap=True,
+                auto_update=True,
+                key="custom_sql_editor",
+            )
+            if not active_sql:
+                active_sql = default_custom
+        else:
+            active_sql = st.text_area(
+                "Enter SQL statement (SELECT / CTE)",
+                value=default_custom,
+                height=180,
+            )
 
     st.markdown("---")
     st.markdown("### Optimization Engine")
     
-    run_all = st.button("⚡ Run Full Optimization Pipeline", use_container_width=True, type="primary")
-    c1, c2 = st.columns(2)
-    with c1:
-        do_analyze = st.button("1. Analyze (GNN)", use_container_width=True)
-    with c2:
-        do_recommend = st.button("2. Recommend (RL)", use_container_width=True)
-    do_bench = st.button("3. Benchmark in Sandbox", use_container_width=True)
+    # Single primary button replacing the previous 3 individual buttons
+    run_all = st.button("⚡ Run Optimization & Benchmark", use_container_width=True, type="primary")
 
     st.markdown("---")
+    st.markdown("### System Status")
     db_status = "🟢 Connected" if health.get("postgres") else "🔴 Disconnected"
     sb_status = "🟢 Ready" if health.get("sandbox") else "🔴 Offline"
-    st.caption(f"Demo DB: {db_status} | Sandbox DB: {sb_status}")
+    gemini_status = "🟢 Active" if health.get("gemini") else "⚪ Optional"
+    
+    st.caption(f"**PostgreSQL DB:** {db_status}")
+    st.caption(f"**Sandbox DB:** {sb_status}")
+    st.caption(f"**Gemini AI Explainer:** {gemini_status}")
+
+    # Optional expander to configure Gemini API Key live
+    with st.expander("⚙️ Gemini AI Key (Optional)", expanded=False):
+        st.caption("AI explanations are privacy-preserved: all tables, columns, and literals are masked before contacting Gemini.")
+        new_key = st.text_input("Gemini API Key", type="password", placeholder="Paste AI Studio Key here", key="sidebar_gemini_key")
+        if st.button("Apply API Key", use_container_width=True):
+            if new_key.strip():
+                try:
+                    res = client.set_gemini_key(new_key.strip())
+                    st.success("Gemini API key configured successfully!")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Error saving key: {exc}")
+            else:
+                st.warning("Please enter a valid key.")
+
+    st.caption("ℹ️ *Query runtimes are measured directly on PostgreSQL via EXPLAIN (ANALYZE, BUFFERS).*")
+
 
 # Actions handling
 if run_all:
-    with st.spinner("Executing: Bitmask Hashing → GNN Analysis → RL Ranking → Sandbox Simulation..."):
+    with st.spinner("Executing query plan analysis and testing index recommendations on PostgreSQL..."):
         try:
             analysis = client.analyze(active_id, active_sql)
             st.session_state.analysis = analysis
@@ -126,47 +194,15 @@ if run_all:
 
             bench = client.benchmark(active_id, cand_id, active_sql)
             st.session_state.bench = bench
-            st.success("Optimization pipeline completed successfully.")
+            st.success("Optimization analysis & PostgreSQL benchmark completed successfully.")
         except APIError as exc:
             st.error(f"Pipeline error: {exc}")
 
-elif do_analyze:
-    with st.spinner("Analyzing plan with Graph Neural Network..."):
-        try:
-            st.session_state.analysis = client.analyze(active_id, active_sql)
-            st.session_state.current_sql = active_sql
-            st.session_state.current_id = active_id
-            st.session_state.recs = None
-            st.session_state.bench = None
-        except APIError as exc:
-            st.error(str(exc))
-
-elif do_recommend:
-    with st.spinner("Scoring and ranking candidate interventions..."):
-        try:
-            st.session_state.recs = client.recommend(active_id, active_sql)
-            if not st.session_state.analysis:
-                st.session_state.analysis = st.session_state.recs.get("analysis")
-        except APIError as exc:
-            st.error(str(exc))
-
-elif do_bench:
-    with st.spinner("Simulating candidate in isolated PostgreSQL Sandbox..."):
-        try:
-            if not st.session_state.recs:
-                st.session_state.recs = client.recommend(active_id, active_sql)
-            candidates = st.session_state.recs.get("candidates", [])
-            valid_cands = [c for c in candidates if c.get("type") != "NO_CHANGE"]
-            cand_id = valid_cands[0]["candidate_id"] if valid_cands else (candidates[0]["candidate_id"] if candidates else None)
-            st.session_state.bench = client.benchmark(active_id, cand_id, active_sql)
-        except APIError as exc:
-            st.error(str(exc))
-
-# Tabs Layout
+# Tabs Layout - Clean DBA-friendly terminology
 tab_optimization, tab_gnn, tab_privacy = st.tabs([
-    "🚀 Optimization & Performance Matrix",
-    "🧠 GNN Execution Tree Analytics",
-    "🛡️ Zero-Exposure Privacy Audit",
+    "🚀 Performance & Benchmark",
+    "🔍 Query Plan & Bottlenecks",
+    "🔒 Data Privacy & Guardrails",
 ])
 
 analysis = st.session_state.analysis
@@ -177,10 +213,14 @@ current_sql = st.session_state.current_sql or active_sql
 # ----------------- TAB 1: OPTIMIZATION & BENCHMARK MATRIX -----------------
 with tab_optimization:
     if bench:
-        st.subheader("Sandbox Verification Matrix")
+        st.subheader("PostgreSQL Benchmark Comparison")
         performance_matrix_card(bench)
 
-        # Show actual updated query side-by-side or stacked
+        # Show AI Explanation card if available
+        if bench.get("explanation"):
+            ai_explanation_card(bench["explanation"])
+
+        # Show actual updated query side-by-side
         st.subheader("Query Optimization Result")
         updated_sql = bench.get("updated_sql") or (bench.get("candidate", {}).get("rewritten_sql") or bench.get("candidate", {}).get("sql"))
 
@@ -198,16 +238,14 @@ with tab_optimization:
                 elif "INDEX" in (bench.get("candidate", {}).get("type") or ""):
                     st.caption("✨ Recommended DDL index to execute for achieving the validated speedup.")
             else:
-                st.info("No query rewrite was required. Indexing or statistics recommendation applies.")
+                st.info("No query rewrite was required. Indexing recommendation applies.")
 
-    elif analysis:
-        st.info("Query analyzed. Click **'3. Benchmark in Sandbox'** to simulate and measure percentage speedup.")
     else:
-        st.info("Select or enter a query in the sidebar and click **'Run Full Optimization Pipeline'**.")
+        st.info("Select or enter a query in the sidebar and click **'Run Optimization & Benchmark'** to measure real execution performance on PostgreSQL.")
 
     # Candidate recommendations
     st.markdown("---")
-    st.subheader("AI Recommendations (Ranked by RL Agent)")
+    st.subheader("Recommended Optimizations")
     candidates = (recs or {}).get("candidates") or (analysis or {}).get("candidates") or []
     visible_cands = [c for c in candidates if c.get("type") != "NO_CHANGE"]
 
@@ -217,12 +255,12 @@ with tab_optimization:
     elif candidates:
         st.info("Current configuration is already optimal. No structural alterations needed.")
     else:
-        st.caption("Generate recommendations to view RL-ranked optimization candidates.")
+        st.caption("Run optimization to view ranked recommendations.")
 
 
-# ----------------- TAB 2: GNN EXECUTION TREE ANALYTICS -----------------
+# ----------------- TAB 2: QUERY PLAN & BOTTLENECKS -----------------
 with tab_gnn:
-    st.subheader("Execution Tree Analytics Module (GNN)")
+    st.subheader("Query Execution Plan & Bottleneck Analysis")
     if analysis and analysis.get("gnn"):
         gnn = analysis["gnn"]
         b_node = gnn.get("bottleneck_node", {})
@@ -232,8 +270,8 @@ with tab_gnn:
             f"""
 <div class="card" style="border-left: 4px solid #6366f1;">
   <div style="display:flex; justify-content:space-between; align-items:center;">
-    <h4 style="margin:0; color:#818cf8;">GNN Bottleneck Classification: {gnn.get('bottleneck_class', 'DETECTED')}</h4>
-    <span class="badge badge-success">GNN Attention: {attn_pct}%</span>
+    <h4 style="margin:0; color:#818cf8;">Primary Bottleneck: {gnn.get('bottleneck_class', 'DETECTED')}</h4>
+    <span class="badge badge-success">Plan Impact: {attn_pct}%</span>
   </div>
   <p style="margin:0.6rem 0; font-size:0.95rem; line-height:1.5;">{gnn.get('explanation', 'Analysis complete.')}</p>
   <small style="color:#94a3b8;">Operator: <b>{b_node.get('node_type')}</b> | Table: <b>{b_node.get('relation') or 'N/A'}</b> | Time: <b>{b_node.get('exclusive_time', 0):.2f} ms</b></small>
@@ -242,7 +280,7 @@ with tab_gnn:
             unsafe_allow_html=True,
         )
 
-        st.markdown("#### Execution Plan DAG Nodes")
+        st.markdown("#### Query Plan Operations & Execution Timing")
         nodes_data = gnn.get("nodes", [])
         if nodes_data:
             st.dataframe(
@@ -251,10 +289,10 @@ with tab_gnn:
                         "Node ID": n["id"],
                         "Operator": n["node_type"],
                         "Relation": n["relation"] or "—",
-                        "Exclusive Time (ms)": n["exclusive_time"],
+                        "Time (ms)": n["exclusive_time"],
                         "Rows Scanned": n["actual_rows"],
-                        "GNN Importance (%)": n["importance"],
-                        "Is Culprit": "🔴 Primary" if n.get("is_bottleneck") else "—",
+                        "Time Share (%)": n["importance"],
+                        "Status": "🔴 Slowest Node" if n.get("is_bottleneck") else "—",
                     }
                     for n in nodes_data
                 ],
@@ -262,19 +300,19 @@ with tab_gnn:
                 hide_index=True,
             )
 
-        with st.expander("Classical PostgreSQL Bottlenecks Detected"):
+        with st.expander("Detected Query Bottlenecks"):
             bottleneck_cards(analysis.get("bottlenecks") or [])
     else:
-        st.info("Run query analysis to see Graph Neural Network node-level execution tree analytics.")
+        st.info("Run query optimization to inspect execution plan bottlenecks.")
 
 
-# ----------------- TAB 3: PRIVACY & REVERSE-HASHING VERIFICATION -----------------
+# ----------------- TAB 3: PRIVACY & DATA GUARDRAILS -----------------
 with tab_privacy:
-    st.subheader("Data Obfuscation & Reverse-Mapping Verification")
+    st.subheader("Data Privacy & Schema Guardrails")
     st.write(
-        "Problem Statement 4 mandates **100% zero exposure of raw sensitive data** to AI models. "
-        "The system obfuscates raw queries into structural metadata hashes before AI processing, "
-        "and de-anonymizes recommendations back to the DBA's schema terms."
+        "To protect company privacy, **all raw sensitive data, table names, and column identifiers** are "
+        "masked before any external AI analysis occurs. AI suggestions are then safely translated back "
+        "into your real database schema."
     )
 
     if analysis and "privacy_trace" in analysis:
@@ -285,10 +323,10 @@ with tab_privacy:
 <div class="card" style="border-left: 4px solid #10b981; margin-bottom: 1.2rem;">
   <h4 style="margin:0; color:#34d399;">Privacy Guardrail Audit: {trace.get('guardrail_status', 'PASSED')}</h4>
   <p style="margin:0.4rem 0 0 0; font-size:0.85rem; color:#cbd5e1;">
-    Sensitive Literals Stripped: <b>{trace.get('literals_removed', 0)}</b> | 
+    Sensitive Values Masked: <b>{trace.get('literals_removed', 0)}</b> | 
     Raw Production Values Exposed to AI: <b>0</b> | 
-    Tables Hashed: <b>{trace.get('tables_anonymized', 0)}</b> | 
-    Columns Hashed: <b>{trace.get('columns_anonymized', 0)}</b>
+    Tables Masked: <b>{trace.get('tables_anonymized', 0)}</b> | 
+    Columns Masked: <b>{trace.get('columns_anonymized', 0)}</b>
   </p>
 </div>
 """,
@@ -298,21 +336,21 @@ with tab_privacy:
         col_p1, col_p2, col_p3 = st.columns(3)
         with col_p1:
             st.markdown("**1. Raw User Query (DBA View)**")
-            st.caption("Contains company schema & sensitive literals.")
+            st.caption("Contains real database schema and query literals.")
             st.code(trace.get("raw_sql", ""), language="sql")
 
         with col_p2:
-            st.markdown("**2. Hashed Representation (AI View)**")
+            st.markdown("**2. Anonymized Safe View (Sent to AI)**")
             st.caption("Zero literals. Tables & columns converted to tokens.")
             st.code(trace.get("anonymized_sql", ""), language="sql")
 
         with col_p3:
-            st.markdown("**3. Reverse-Mapped Query (Re-Hashed)**")
-            st.caption("AI output safely translated back to DBA schema.")
+            st.markdown("**3. Reconstructed Query (DBA View)**")
+            st.caption("AI output safely translated back to your real schema.")
             st.code(trace.get("reconstructed_sql", ""), language="sql")
 
     else:
-        st.info("Analyze a query to inspect live end-to-end obfuscation and reverse-mapping traces.")
+        st.info("Run optimization on a query to inspect live end-to-end privacy masking and reconstruction traces.")
         # Fallback static demo
         try:
             demo_pair = client.privacy_demo()
@@ -322,7 +360,7 @@ with tab_privacy:
                 st.markdown("**Raw Input**")
                 st.code(demo_pair.get("raw", ""), language="sql")
             with c_b:
-                st.markdown("**AI Model Input (Anonymized Tokens)**")
+                st.markdown("**Safe Model Input (Masked Tokens)**")
                 st.code(demo_pair.get("anonymized", ""), language="sql")
         except Exception:
             pass

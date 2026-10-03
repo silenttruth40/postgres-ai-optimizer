@@ -79,3 +79,10 @@ def test_custom_query_analysis_endpoint(monkeypatch):
     assert data["sql"] == custom_sql
     assert "column_001" in data["anonymized_sql"]
 
+
+def test_set_gemini_config():
+    response = client.post("/config/gemini", json={"api_key": "test_dummy_key", "model": "gemini-1.5-flash"})
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+    assert response.json()["gemini"] is True
+
