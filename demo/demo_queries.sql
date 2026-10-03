@@ -1,12 +1,12 @@
 -- Intentionally inefficient demo queries. Metrics come from EXPLAIN ANALYZE.
 
 -- Q001: filtered join + aggregation (missing composite index)
-SELECT c.customer_id, c.name, COUNT(o.order_id) AS order_count, SUM(o.amount) AS total_amount
-FROM customers c
-JOIN orders o ON c.customer_id = o.customer_id
-WHERE o.created_at >= CURRENT_DATE - INTERVAL '30 days'
-GROUP BY c.customer_id, c.name
-ORDER BY total_amount DESC;
+-- Q001: Missing composite index
+SELECT *
+FROM orders
+WHERE customer_id = 42
+  AND created_at >= CURRENT_DATE - INTERVAL '30 days'
+ORDER BY created_at DESC;
 
 -- Q002: sequential scan with sensitive literal (privacy demo)
 SELECT customer_id, name, email
@@ -14,12 +14,14 @@ FROM customers
 WHERE email = 'user42@example.com';
 
 -- Q003: aggregation + sort on unindexed timestamp
-SELECT customer_id, COUNT(*) AS txn_count, SUM(amount) AS total
-FROM transactions
-WHERE created_at >= CURRENT_DATE - INTERVAL '14 days'
-GROUP BY customer_id
-ORDER BY total DESC
-LIMIT 50;
+-- Q003: Correlated subquery
+SELECT c.id, c.name
+FROM customers c
+WHERE (
+    SELECT COUNT(*)
+    FROM orders o
+    WHERE o.customer_id = c.id
+) > 10;
 
 -- Q004: SELECT * + large sort
 SELECT *
