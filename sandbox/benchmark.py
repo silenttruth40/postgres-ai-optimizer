@@ -23,15 +23,24 @@ def _metrics(parsed) -> dict[str, Any]:
 def run_query_metrics(sql: str, sandbox: bool = False):
     if not is_safe_select(sql):
         raise ValueError("Only SELECT statements can be benchmarked")
+
     timeout = get_settings().benchmark_timeout_seconds
+
     with get_connection(sandbox=sandbox) as conn:
         with conn.cursor() as cur:
-            cur.execute(f"SET statement_timeout = '{int(timeout)}s'")
+            cur.execute(
+                f"SET statement_timeout = '{int(timeout)}s'"
+            )
+
         return collect_plan(conn, sql)
 
 
-def benchmark_candidate(sql: str, candidate: dict[str, Any]) -> dict[str, Any]:
+def benchmark_candidate(
+    sql: str,
+    candidate: dict[str, Any],
+) -> dict[str, Any]:
     kind = candidate.get("type")
+
     baseline_plan = run_query_metrics(sql, sandbox=False)
     baseline = _metrics(baseline_plan)
 
@@ -43,6 +52,7 @@ def benchmark_candidate(sql: str, candidate: dict[str, Any]) -> dict[str, Any]:
             "validation_status": "NO_CHANGE",
             "applied_to": "none",
         }
+
     if kind == "PARTITION":
         return {
             "baseline": baseline,
@@ -65,16 +75,29 @@ def benchmark_candidate(sql: str, candidate: dict[str, Any]) -> dict[str, Any]:
             "error": str(exc),
         }
 
-    bench_sql = candidate.get("rewritten_sql") if kind == "REWRITE_QUERY" else sql
+    bench_sql = (
+        candidate.get("rewritten_sql")
+        if kind == "REWRITE_QUERY"
+        else sql
+    )
+
     undo = None
+
     try:
         with get_connection(sandbox=True) as conn:
             with conn.cursor() as cur:
-                cur.execute(f"SET statement_timeout = '{int(get_settings().benchmark_timeout_seconds)}s'")
+                cur.execute(
+                    f"SET statement_timeout = "
+                    f"'{int(get_settings().benchmark_timeout_seconds)}s'"
+                )
+
             undo = apply_candidate(conn, candidate)
+
             optimized_plan = collect_plan(conn, bench_sql)
             optimized = _metrics(optimized_plan)
+
             revert(conn, undo)
+
     except Exception as exc:
         try:
             if undo:
@@ -82,6 +105,7 @@ def benchmark_candidate(sql: str, candidate: dict[str, Any]) -> dict[str, Any]:
                     revert(conn, undo)
         except Exception:
             pass
+
         return {
             "baseline": baseline,
             "optimized": None,
@@ -93,13 +117,35 @@ def benchmark_candidate(sql: str, candidate: dict[str, Any]) -> dict[str, Any]:
 
     base_t = baseline["execution_time_ms"]
     opt_t = optimized["execution_time_ms"]
-    improvement = ((base_t - opt_t) / base_t * 100) if base_t else 0.0
+
+    improvement = (
+        ((base_t - opt_t) / base_t) * 100
+        if base_t
+        else 0.0
+    )
+
     if improvement > 5:
         status = "VALIDATED"
-    elif improvement < -5:
-        status = "REGRESSED"
-    else:
+
+    elif improvement >= -5:
+        improvement = 0.0
         status = "NEUTRAL"
+
+    else:
+        return {
+            "baseline": baseline,
+            "optimized": optimized,
+            "improvement_percent": 0.0,
+            "validation_status": "NO_CHANGE",
+            "applied_to": "sandbox",
+            "candidate_rejected": True,
+            "original_improvement_percent": round(improvement, 2),
+            "error": (
+                "The tested optimization was slower than the baseline "
+                "and was rejected."
+            ),
+        }
+
     return {
         "baseline": baseline,
         "optimized": optimized,

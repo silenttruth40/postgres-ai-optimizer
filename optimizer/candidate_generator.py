@@ -5,7 +5,7 @@ from typing import Any
 
 from backend.models import ParsedPlan
 from optimizer.bottleneck_detector import Bottleneck
-from optimizer.index_advisor import IndexCandidate, advise_indexes
+from optimizer.index_advisor import advise_indexes
 from optimizer.join_optimizer import join_recommendations
 from optimizer.query_rewriter import rewrite_candidates
 
@@ -49,8 +49,14 @@ def generate_candidates(
 ) -> list[Candidate]:
     candidates: list[Candidate] = []
     idx = 1
+
     for rec in advise_indexes(sql, plan, bottlenecks, existing):
-        kind = "CREATE_COMPOSITE_INDEX" if len(rec.columns) > 1 else "CREATE_INDEX"
+        kind = (
+            "CREATE_COMPOSITE_INDEX"
+            if len(rec.columns) > 1
+            else "CREATE_INDEX"
+        )
+
         candidates.append(
             Candidate(
                 candidate_id=f"C{idx:03d}",
@@ -61,9 +67,11 @@ def generate_candidates(
                 reason=rec.reason,
                 confidence=rec.confidence,
                 sources=["Heuristic"],
+                estimated=True,
             )
         )
         idx += 1
+
     for rec in join_recommendations(plan, bottlenecks):
         candidates.append(
             Candidate(
@@ -73,9 +81,11 @@ def generate_candidates(
                 reason=rec["reason"],
                 confidence=rec["confidence"],
                 sources=["Heuristic"],
+                estimated=True,
             )
         )
         idx += 1
+
     for rec in rewrite_candidates(sql):
         candidates.append(
             Candidate(
@@ -85,11 +95,20 @@ def generate_candidates(
                 reason=rec["reason"],
                 confidence=rec["confidence"],
                 sources=["Heuristic"],
+                estimated=True,
             )
         )
         idx += 1
-    if any(b.type == "CARDINALITY_MISESTIMATION" for b in bottlenecks):
-        table = next((b.relation for b in bottlenecks if b.relation), "orders")
+
+    if any(
+        b.type == "CARDINALITY_MISESTIMATION"
+        for b in bottlenecks
+    ):
+        table = next(
+            (b.relation for b in bottlenecks if b.relation),
+            "orders",
+        )
+
         candidates.append(
             Candidate(
                 candidate_id=f"C{idx:03d}",
@@ -99,18 +118,34 @@ def generate_candidates(
                 reason="Refresh planner statistics after large estimation error",
                 confidence=0.45,
                 sources=["Heuristic"],
+                estimated=True,
             )
         )
         idx += 1
-    large_tables = {b.relation for b in bottlenecks if b.relation and b.type in {"MISSING_INDEX", "EXPENSIVE_JOIN"}}
+
+    large_tables = {
+        b.relation
+        for b in bottlenecks
+        if b.relation
+        and b.type in {"MISSING_INDEX", "EXPENSIVE_JOIN"}
+    }
+
     if "orders" in large_tables or "transactions" in large_tables:
-        table = "orders" if "orders" in large_tables else "transactions"
+        table = (
+            "orders"
+            if "orders" in large_tables
+            else "transactions"
+        )
+
         candidates.append(
             Candidate(
                 candidate_id=f"C{idx:03d}",
                 type="PARTITION",
                 table=table,
-                reason=f"Estimated: range partitioning {table} by created_at may help time-window queries",
+                reason=(
+                    f"Estimated: range partitioning {table} by "
+                    "created_at may help time-window queries"
+                ),
                 confidence=0.35,
                 sources=["Heuristic"],
                 estimated=True,
@@ -118,14 +153,23 @@ def generate_candidates(
             )
         )
         idx += 1
-    if not candidates:
-        candidates.append(
-            Candidate(
-                candidate_id="C001",
-                type="NO_CHANGE",
-                reason="No high-confidence structural change identified",
-                confidence=0.4,
-                sources=["Heuristic"],
-            )
+
+    candidates.append(
+        Candidate(
+            candidate_id=f"C{idx:03d}",
+            type="NO_CHANGE",
+            reason=(
+                "Keep the current query and database configuration "
+                "if no tested optimization improves performance."
+            ),
+            confidence=1.0,
+            sources=["Safety fallback"],
+            estimated=False,
+            extra={
+                "safe_fallback": True,
+                "accept_if_no_improvement": True,
+            },
         )
+    )
+
     return candidates
