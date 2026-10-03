@@ -58,34 +58,60 @@ def list_indexes(conn: Any) -> list[tuple[str, tuple[str, ...]]]:
     return out
 
 
+def discover_tables(conn: Any) -> list[str]:
+    """Discovers user tables from the current database and registers them."""
+    sql = """
+    SELECT table_name
+    FROM information_schema.tables
+    WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+      AND table_type = 'BASE TABLE'
+    ORDER BY table_name;
+    """
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            rows = cur.fetchall()
+        tables = [r["table_name"] if isinstance(r, dict) else r[0] for r in rows]
+        for t in tables:
+            register_custom_table(t)
+        return tables
+    except Exception:
+        return list(ALLOWED_TABLES)
+
+
 def register_custom_table(table: str, columns: list[str] | None = None) -> None:
     """Allow custom user tables and columns while blocking system catalogs."""
-    if not table.lower().startswith(("pg_", "information_schema")) and is_safe_identifier(table):
-        ALLOWED_TABLES.add(table.lower())
+    tbl = table.lower().strip()
+    if not tbl.startswith(("pg_", "information_schema")) and is_safe_identifier(tbl):
+        ALLOWED_TABLES.add(tbl)
         if columns:
             for c in columns:
-                if is_safe_identifier(c):
-                    ALLOWED_COLUMNS.add(c.lower())
+                col = c.lower().strip()
+                if is_safe_identifier(col):
+                    ALLOWED_COLUMNS.add(col)
 
 
 def validate_candidate(candidate: dict[str, Any]) -> None:
     kind = candidate.get("type")
     if kind in {"CREATE_INDEX", "CREATE_COMPOSITE_INDEX"}:
-        table = (candidate.get("table") or "").lower()
-        columns = [c.lower() for c in (candidate.get("columns") or [])]
+        table = (candidate.get("table") or "").lower().strip()
+        columns = [c.lower().strip() for c in (candidate.get("columns") or [])]
         if (
             not table
             or table.startswith(("pg_", "information_schema"))
             or not is_safe_identifier(table)
-            or table not in ALLOWED_TABLES
         ):
-            raise ValueError(f"Refusing index on unknown or system table {table}")
-        if not columns or not all(c in ALLOWED_COLUMNS and is_safe_identifier(c) for c in columns):
-            raise ValueError("Refusing index with unknown or unsafe columns")
+            raise ValueError(f"Refusing index on invalid or system table {table}")
+        ALLOWED_TABLES.add(table)
+        for c in columns:
+            if not is_safe_identifier(c):
+                raise ValueError(f"Refusing index with invalid column name {c}")
+            ALLOWED_COLUMNS.add(c)
     if kind == "UPDATE_STATISTICS":
-        table = (candidate.get("table") or "").lower()
-        if not table or table not in ALLOWED_TABLES:
-            raise ValueError(f"Refusing ANALYZE on unknown or invalid table {table}")
+        table = (candidate.get("table") or "").lower().strip()
+        if not table or table.startswith(("pg_", "information_schema")) or not is_safe_identifier(table):
+            raise ValueError(f"Refusing ANALYZE on invalid or system table {table}")
+        ALLOWED_TABLES.add(table)
     if kind == "REWRITE_QUERY":
         sql = (candidate.get("rewritten_sql") or "").strip().lower()
         if not sql.startswith("select") and not sql.startswith("with"):

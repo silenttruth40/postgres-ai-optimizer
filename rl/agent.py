@@ -16,7 +16,7 @@ class RankingAgent:
         self.action_bias = {name: 0.0 for name in ACTIONS}
         self.action_bias["CREATE_COMPOSITE_INDEX"] = 0.25
         self.action_bias["CREATE_INDEX"] = 0.2
-        self.action_bias["REWRITE_QUERY"] = 0.05
+        self.action_bias["REWRITE_QUERY"] = 0.35
         self.action_bias["UPDATE_STATISTICS"] = 0.02
         self.action_bias["NO_CHANGE"] = -0.05
         self.action_bias["PARTITION"] = -0.1
@@ -38,8 +38,10 @@ class RankingAgent:
         if candidate.type in {"CREATE_INDEX", "CREATE_COMPOSITE_INDEX"}:
             base += 0.15 * seq + 0.05 * joins
             base += reward(candidate.confidence * 40, index_columns=len(candidate.columns))
-        if candidate.type == "REWRITE_QUERY" and "select *" in (candidate.rewritten_sql or "").lower():
-            base -= 0.2
+        if candidate.type == "REWRITE_QUERY":
+            base += 0.25
+            if "select *" in (candidate.rewritten_sql or "").lower():
+                base -= 0.2
         return float(base)
 
     def rank(self, candidates: list[Candidate], state: OptimizerState) -> list[Candidate]:

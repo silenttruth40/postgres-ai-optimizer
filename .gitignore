@@ -13,6 +13,7 @@ data/*.npz
 data/*.pt
 data/*.zip
 data/*.json
+data/pgsql/
 !data/.gitkeep
 .streamlit/secrets.toml
 *.log

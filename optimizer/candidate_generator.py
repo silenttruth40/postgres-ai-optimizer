@@ -86,7 +86,7 @@ def generate_candidates(
         )
         idx += 1
 
-    for rec in rewrite_candidates(sql):
+    for rec in rewrite_candidates(sql, bottlenecks):
         candidates.append(
             Candidate(
                 candidate_id=f"C{idx:03d}",
@@ -94,7 +94,7 @@ def generate_candidates(
                 rewritten_sql=rec.get("rewritten_sql"),
                 reason=rec["reason"],
                 confidence=rec["confidence"],
-                sources=["Heuristic"],
+                sources=[rec.get("source", "Heuristic")],
                 estimated=True,
             )
         )

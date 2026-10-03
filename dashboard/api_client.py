@@ -70,3 +70,26 @@ class OptimizerClient:
             payload["model"] = model
         return self._request("POST", "/config/gemini", payload)
 
+    def get_database_config(self) -> dict:
+        return self._request("GET", "/config/database")
+
+    def switch_database(
+        self,
+        host: str,
+        port: int,
+        database: str,
+        user: str,
+        password: str = "",
+        sandbox_database: str | None = None,
+    ) -> dict:
+        payload = {
+            "host": host,
+            "port": port,
+            "database": database,
+            "user": user,
+            "password": password,
+        }
+        if sandbox_database:
+            payload["sandbox_database"] = sandbox_database
+        return self._request("POST", "/config/database", payload)
+

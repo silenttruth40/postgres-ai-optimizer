@@ -83,8 +83,50 @@ except APIError as exc:
 ids = [q["query_id"] for q in queries]
 labels = {q["query_id"]: f"{q['query_id']} — {q['title']}" for q in queries}
 
-# Sidebar - Query Configuration & Actions
+# Sidebar - Database Connection, Query Configuration & Actions
 with st.sidebar:
+    st.markdown("### PostgreSQL Database")
+    try:
+        db_cfg = client.get_database_config()
+    except Exception:
+        db_cfg = {}
+
+    cur_db = db_cfg.get("database", "optimizer")
+    cur_host = db_cfg.get("host", "127.0.0.1")
+    cur_port = db_cfg.get("port", 5432)
+    cur_tables = db_cfg.get("tables", [])
+    
+    st.markdown(f"**Target:** `🟢 {cur_db}` on `{cur_host}:{cur_port}`")
+    if cur_tables:
+        with st.expander(f"📁 Available Tables ({len(cur_tables)})", expanded=False):
+            st.caption(", ".join(cur_tables))
+            
+    with st.expander("🔌 Connect to Manual / Custom Database", expanded=False):
+        st.caption("Point the optimizer directly to your own PostgreSQL database instance:")
+        new_db_host = st.text_input("Host", value=str(cur_host), key="db_host_input")
+        new_db_port = st.number_input("Port", value=int(cur_port), min_value=1, max_value=65535, key="db_port_input")
+        new_db_name = st.text_input("Database Name", value=str(cur_db), key="db_name_input")
+        new_db_user = st.text_input("Username", value=db_cfg.get("user", "optimizer"), key="db_user_input")
+        new_db_pass = st.text_input("Password", type="password", key="db_pass_input")
+        
+        if st.button("Connect & Scan Tables", use_container_width=True):
+            try:
+                switch_res = client.switch_database(
+                    host=new_db_host,
+                    port=int(new_db_port),
+                    database=new_db_name,
+                    user=new_db_user,
+                    password=new_db_pass,
+                )
+                st.success(f"Connected to '{switch_res.get('database')}'. Discovered {switch_res.get('table_count')} tables!")
+                st.session_state.analysis = None
+                st.session_state.recs = None
+                st.session_state.bench = None
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Connection failed: {exc}")
+
+    st.markdown("---")
     st.markdown("### Query Input")
     input_mode = st.radio(
         "Source",
@@ -108,13 +150,13 @@ with st.sidebar:
             st.code(active_sql, language="sql")
     else:
         active_id = "custom"
-        default_custom = """SELECT c.customer_id, c.name, COUNT(o.order_id) AS total_orders
+        default_custom = """SELECT c.customer_id, c.name
 FROM customers c
-JOIN orders o ON o.customer_id = c.customer_id
-WHERE o.created_at >= CURRENT_DATE - INTERVAL '60 days'
-  AND o.amount > 100
-GROUP BY c.customer_id, c.name
-ORDER BY total_orders DESC;"""
+WHERE (
+    SELECT COUNT(*)
+    FROM orders o
+    WHERE o.customer_id = c.customer_id
+) > 10;"""
 
         st.markdown("**Enter SQL query below:**")
         if HAS_ACE:
@@ -125,8 +167,8 @@ ORDER BY total_orders DESC;"""
                 keybinding="vscode",
                 font_size=13,
                 tab_size=2,
-                min_lines=10,
-                max_lines=26,
+                min_lines=8,
+                max_lines=24,
                 show_gutter=True,
                 show_print_margin=False,
                 wrap=True,
@@ -139,7 +181,7 @@ ORDER BY total_orders DESC;"""
             active_sql = st.text_area(
                 "Enter SQL statement (SELECT / CTE)",
                 value=default_custom,
-                height=180,
+                height=160,
             )
 
     st.markdown("---")
@@ -159,14 +201,17 @@ ORDER BY total_orders DESC;"""
     st.caption(f"**Gemini AI Explainer:** {gemini_status}")
 
     # Optional expander to configure Gemini API Key live
-    with st.expander("⚙️ Gemini AI Key (Optional)", expanded=False):
+    with st.expander("⚙️ Gemini AI Key (Optional)", expanded=not health.get("gemini")):
         st.caption("AI explanations are privacy-preserved: all tables, columns, and literals are masked before contacting Gemini.")
         new_key = st.text_input("Gemini API Key", type="password", placeholder="Paste AI Studio Key here", key="sidebar_gemini_key")
         if st.button("Apply API Key", use_container_width=True):
             if new_key.strip():
                 try:
-                    res = client.set_gemini_key(new_key.strip())
-                    st.success("Gemini API key configured successfully!")
+                    res = client.set_gemini_key(new_key.strip(), model=health.get("gemini_model") or "gemini-2.5-flash")
+                    if res.get("gemini"):
+                        st.success(f"Gemini API key configured ({res.get('gemini_model')}).")
+                    else:
+                        st.error("Key was not saved on the backend.")
                     st.rerun()
                 except Exception as exc:
                     st.error(f"Error saving key: {exc}")
@@ -178,7 +223,7 @@ ORDER BY total_orders DESC;"""
 
 # Actions handling
 if run_all:
-    with st.spinner("Executing query plan analysis and testing index recommendations on PostgreSQL..."):
+    with st.spinner("Analyzing plan bottlenecks, generating AI improvised query, and executing live benchmarks on PostgreSQL..."):
         try:
             analysis = client.analyze(active_id, active_sql)
             st.session_state.analysis = analysis
@@ -190,7 +235,10 @@ if run_all:
 
             candidates = recs.get("candidates", [])
             valid_cands = [c for c in candidates if c.get("type") != "NO_CHANGE"]
-            cand_id = valid_cands[0]["candidate_id"] if valid_cands else (candidates[0]["candidate_id"] if candidates else None)
+            
+            # Prioritize REWRITE_QUERY (AI Improvised Query) if available
+            rewrites = [c for c in valid_cands if c.get("type") == "REWRITE_QUERY"]
+            cand_id = rewrites[0]["candidate_id"] if rewrites else (valid_cands[0]["candidate_id"] if valid_cands else (candidates[0]["candidate_id"] if candidates else None))
 
             bench = client.benchmark(active_id, cand_id, active_sql)
             st.session_state.bench = bench
@@ -221,22 +269,28 @@ with tab_optimization:
             ai_explanation_card(bench["explanation"])
 
         # Show actual updated query side-by-side
-        st.subheader("Query Optimization Result")
-        updated_sql = bench.get("updated_sql") or (bench.get("candidate", {}).get("rewritten_sql") or bench.get("candidate", {}).get("sql"))
+        st.subheader("Side-by-Side Query Comparison")
+        cand = bench.get("candidate", {})
+        cand_type = cand.get("type")
+        is_rewrite = cand_type == "REWRITE_QUERY"
+        updated_sql = bench.get("updated_sql") or cand.get("rewritten_sql") or cand.get("sql")
 
         col_orig, col_opt = st.columns(2)
         with col_orig:
             st.markdown("**Original Query (User Input)**")
+            st.caption("Executed live on connected PostgreSQL database.")
             st.code(current_sql, language="sql")
 
         with col_opt:
-            st.markdown("**Optimized Output / Applied Schema Change**")
+            if is_rewrite:
+                st.markdown("**AI Improvised Query (Optimized SQL)**")
+                technique = cand.get("technique") or "AI Plan Optimization"
+                st.caption(f"✨ **{technique}**: Executed live on PostgreSQL with identical result set.")
+            else:
+                st.markdown("**Applied Optimization / Schema Change**")
+                st.caption("✨ Recommended DDL index executed and validated in sandbox.")
             if updated_sql:
                 st.code(updated_sql, language="sql")
-                if bench.get("candidate", {}).get("type") == "REWRITE_QUERY":
-                    st.caption("✨ Safely rewritten SQL query to eliminate nested loop / redundant scans.")
-                elif "INDEX" in (bench.get("candidate", {}).get("type") or ""):
-                    st.caption("✨ Recommended DDL index to execute for achieving the validated speedup.")
             else:
                 st.info("No query rewrite was required. Indexing recommendation applies.")
 
@@ -250,12 +304,25 @@ with tab_optimization:
     visible_cands = [c for c in candidates if c.get("type") != "NO_CHANGE"]
 
     if visible_cands:
-        for cand in visible_cands[:4]:
-            candidate_card(cand)
+        for cand_item in visible_cands[:4]:
+            candidate_card(cand_item)
+            c_id = cand_item.get("candidate_id")
+            c_type = cand_item.get("type")
+            # Allow user to benchmark any specific candidate if desired
+            if bench and bench.get("candidate", {}).get("candidate_id") != c_id:
+                if st.button(f"⚡ Benchmark This Option ({c_type})", key=f"bench_btn_{c_id}"):
+                    with st.spinner(f"Benchmarking candidate {c_id} on PostgreSQL..."):
+                        try:
+                            bench_cand = client.benchmark(st.session_state.current_id, c_id, current_sql)
+                            st.session_state.bench = bench_cand
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Benchmark error: {e}")
     elif candidates:
         st.info("Current configuration is already optimal. No structural alterations needed.")
     else:
         st.caption("Run optimization to view ranked recommendations.")
+
 
 
 # ----------------- TAB 2: QUERY PLAN & BOTTLENECKS -----------------

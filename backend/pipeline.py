@@ -17,6 +17,13 @@ from backend.database import get_connection
 _STORE: dict[str, dict[str, Any]] = {}
 
 
+def _sql_changed(query_id: str, sql: str | None) -> bool:
+    if not sql:
+        return False
+    stored = _STORE.get(query_id, {}).get("sql")
+    return bool(stored) and stored.strip() != sql.strip()
+
+
 def list_queries() -> list[dict[str, Any]]:
     return [
         {
@@ -86,7 +93,7 @@ def analyze_query(query_id: str, sql: str | None = None) -> dict[str, Any]:
 
 
 def recommend_query(query_id: str, sql: str | None = None) -> dict[str, Any]:
-    if query_id not in _STORE or "analysis" not in _STORE[query_id]:
+    if query_id not in _STORE or "analysis" not in _STORE[query_id] or _sql_changed(query_id, sql):
         analyze_query(query_id, sql)
     analysis = _STORE[query_id]["analysis"]
     ranked = _STORE[query_id]["ranked"]
@@ -94,7 +101,7 @@ def recommend_query(query_id: str, sql: str | None = None) -> dict[str, Any]:
 
 
 def benchmark_query(query_id: str, candidate_id: str | None = None, sql: str | None = None) -> dict[str, Any]:
-    if query_id not in _STORE or "ranked" not in _STORE[query_id]:
+    if query_id not in _STORE or "ranked" not in _STORE[query_id] or _sql_changed(query_id, sql):
         recommend_query(query_id, sql)
     ranked = _STORE[query_id]["ranked"]
     candidate = ranked[0]
@@ -111,6 +118,7 @@ def benchmark_query(query_id: str, candidate_id: str | None = None, sql: str | N
         candidate,
         _STORE[query_id].get("anonymizer"),
         result,
+        sql_text,
     )
     payload = {
         "query_id": query_id,
@@ -118,6 +126,9 @@ def benchmark_query(query_id: str, candidate_id: str | None = None, sql: str | N
         "baseline": result.get("baseline"),
         "optimized": result.get("optimized"),
         "improvement_percent": result.get("improvement_percent"),
+        "speedup_factor": result.get("speedup_factor", 1.0),
+        "hit_diff": result.get("hit_diff", 0),
+        "read_diff": result.get("read_diff", 0),
         "validation_status": result.get("validation_status"),
         "applied_to": result.get("applied_to"),
         "write_latency_overhead_ms": result.get("write_latency_overhead_ms", 0.0),

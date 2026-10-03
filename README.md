@@ -39,55 +39,70 @@ An AI-driven query tuning and execution plan analysis platform that enforces **s
 
 ## Quick Start Guide
 
-### Option 1: Run with Docker Compose (Recommended)
+### 🚀 Easiest Option: One-Click Launch (No Docker Required)
 
-Requires Docker Desktop installed and running.
+You can launch the entire project (local PostgreSQL, FastAPI backend, and Streamlit dashboard) with a single command:
 
-```bash
-# 1. Build and start all 4 services (postgres, sandbox-postgres, backend, dashboard)
-docker compose up --build
-
-# 2. Access the applications:
-#    - Interactive Dashboard: http://localhost:8501
-#    - FastAPI Swagger Docs:  http://localhost:8000/docs
+**Option A (Windows Double-Click or Command Line):**
+```cmd
+run.bat
 ```
+
+**Option B (Python Launcher):**
+```powershell
+.\.venv\Scripts\python run.py
+```
+
+This single command will:
+1. Verify / start your local PostgreSQL instance on port `5432`.
+2. Start the FastAPI backend server on `http://127.0.0.1:8000`.
+3. Start the Streamlit UI on `http://localhost:8501`.
+4. Automatically open your browser to the interactive dashboard.
 
 ---
 
-### Option 2: Run Locally with Python (.venv)
+### Manual Step-by-Step Commands (Without Docker)
 
-A local virtual environment `.venv` has already been pre-configured with all dependencies.
+If you prefer starting services manually across individual terminal windows:
 
-#### 1. Configure Environment
-Open `.env` and set your configuration (and optional Gemini API key):
-```ini
-POSTGRES_HOST=localhost
-POSTGRES_PORT=5432
-SANDBOX_POSTGRES_PORT=5433
-GEMINI_API_KEY=your_gemini_key_here
-```
-
-#### 2. Start PostgreSQL Databases (via Docker or local PostgreSQL)
-```bash
-docker compose up -d postgres sandbox-postgres
-```
-
-#### 3. Seed Realistic High-Volume Dataset (100,000+ Rows)
 ```powershell
-.\.venv\Scripts\python scripts/load_real_dataset.py --mode realistic --rows 100000
-```
+# 1. Start PostgreSQL (runs locally on 127.0.0.1:5432):
+.\.venv\Scripts\python scripts/control_local_postgres.py start
 
-#### 4. Start the Backend API
-```powershell
-.\.venv\Scripts\uvicorn backend.main:app --port 8000 --reload
-```
+# 2. Start the Backend API (Terminal 1):
+.\.venv\Scripts\uvicorn backend.main:app --host 127.0.0.1 --port 8000
 
-#### 5. Start the Streamlit Dashboard (In a new terminal)
-```powershell
+# 3. Start the Streamlit Dashboard (Terminal 2):
 .\.venv\Scripts\streamlit run dashboard/app.py
 ```
 
 Open your browser at **http://localhost:8501**.
+
+To stop local PostgreSQL when finished:
+```powershell
+.\.venv\Scripts\python scripts/control_local_postgres.py stop
+```
+
+---
+
+### 🔌 Connecting Your Own Manual / Large Database
+
+You can point the optimizer directly to any manual PostgreSQL database:
+1. **Via the Web UI**:
+   - In the dashboard sidebar, expand **"🔌 Connect to Manual / Custom Database"**.
+   - Enter your `Host`, `Port`, `Database Name`, `Username`, and `Password`.
+   - Click **"Connect & Scan Tables"**. All tables are auto-discovered from `information_schema.tables` and immediately available.
+2. **Via `.env`**:
+   - Update `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, and `POSTGRES_PASSWORD` in `.env`.
+
+---
+
+### ⚡ Running Query Optimization & Benchmark
+1. Select **Custom SQL Query** in the sidebar.
+2. Enter or paste your query in the code editor.
+3. Click **"⚡ Run Optimization & Benchmark"**.
+4. Both your **Original User Query** and the **AI Improvised Query** will execute live on PostgreSQL with `EXPLAIN (ANALYZE, BUFFERS)`.
+5. View the side-by-side SQL diff and the comprehensive execution performance matrix (runtimes, buffer cache hits, physical disk reads, and speedup factor).
 
 ---
 

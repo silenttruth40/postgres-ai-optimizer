@@ -81,8 +81,45 @@ def test_custom_query_analysis_endpoint(monkeypatch):
 
 
 def test_set_gemini_config():
-    response = client.post("/config/gemini", json={"api_key": "test_dummy_key", "model": "gemini-1.5-flash"})
+    response = client.post("/config/gemini", json={"api_key": "test_dummy_key", "model": "gemini-2.5-flash"})
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
     assert response.json()["gemini"] is True
+    assert response.json()["gemini_model"] == "gemini-2.5-flash"
+
+
+def test_get_database_config():
+    response = client.get("/config/database")
+    assert response.status_code == 200
+    data = response.json()
+    assert "status" in data
+    assert "database" in data
+    assert "tables" in data
+
+
+def test_benchmark_rewrite_query(monkeypatch):
+    payload = {
+        "query_id": "custom",
+        "candidate": {
+            "candidate_id": "C001",
+            "type": "REWRITE_QUERY",
+            "rewritten_sql": "SELECT c.customer_id FROM customers c JOIN orders o ON c.customer_id = o.customer_id",
+            "technique": "JOIN Aggregation",
+        },
+        "baseline": {"execution_time_ms": 100.0, "shared_hit_blocks": 5000, "rows": 10},
+        "optimized": {"execution_time_ms": 10.0, "shared_hit_blocks": 500, "rows": 10},
+        "improvement_percent": 90.0,
+        "speedup_factor": 10.0,
+        "validation_status": "VALIDATED",
+    }
+    monkeypatch.setattr(
+        "backend.routes.benchmarks.benchmark_query",
+        lambda query_id, candidate_id=None, sql=None: payload,
+    )
+    response = client.post("/benchmark", json={"query_id": "custom", "candidate_id": "C001"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["validation_status"] == "VALIDATED"
+    assert data["speedup_factor"] == 10.0
+    assert data["candidate"]["type"] == "REWRITE_QUERY"
 

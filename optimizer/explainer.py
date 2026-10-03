@@ -1,11 +1,120 @@
 from __future__ import annotations
 
+import logging
+import os
 from typing import Any
 
 from backend.config import get_settings
 from optimizer.bottleneck_detector import Bottleneck
 from optimizer.candidate_generator import Candidate
 from privacy.anonymizer import Anonymizer
+
+logger = logging.getLogger("optimizer.explainer")
+
+_RETIRED_MODELS = {
+    "gemini-1.5-flash",
+    "gemini-1.5-flash-001",
+    "gemini-1.5-flash-002",
+    "gemini-1.5-pro",
+    "gemini-1.0-pro",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+}
+
+_FALLBACK_MODELS = (
+    "gemini-2.5-flash",
+    "gemini-3.8-flash",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+)
+
+
+def _resolve_api_key() -> str:
+    settings = get_settings()
+    return (settings.gemini_api_key or os.environ.get("GEMINI_API_KEY") or "").strip()
+
+
+def _model_candidates() -> list[str]:
+    settings = get_settings()
+    configured = (settings.gemini_model or os.environ.get("GEMINI_MODEL") or "").strip()
+    if configured.lower() in _RETIRED_MODELS:
+        logger.warning("Configured Gemini model %s is retired; using current Flash models", configured)
+        configured = ""
+    ordered: list[str] = []
+    for name in (configured, *_FALLBACK_MODELS):
+        if name and name not in ordered and name.lower() not in _RETIRED_MODELS:
+            ordered.append(name)
+    return ordered or list(_FALLBACK_MODELS)
+
+
+def _extract_gemini_text(data: dict[str, Any]) -> str | None:
+    candidates_list = data.get("candidates") or []
+    if not candidates_list:
+        feedback = data.get("promptFeedback") or {}
+        reason = feedback.get("blockReason") or data.get("error", {}).get("message")
+        if reason:
+            logger.warning("Gemini returned no candidates: %s", reason)
+        return None
+    content = candidates_list[0].get("content") or {}
+    parts = content.get("parts") or []
+    chunks: list[str] = []
+    for part in parts:
+        if not isinstance(part, dict):
+            continue
+        text = part.get("text")
+        if isinstance(text, str) and text.strip():
+            chunks.append(text.strip())
+    if chunks:
+        return "\n".join(chunks).strip()
+    finish = candidates_list[0].get("finishReason")
+    logger.warning("Gemini candidate had no text parts (finishReason=%s)", finish)
+    return None
+
+
+def _build_prompt(
+    query_id: str,
+    bottlenecks: list[Bottleneck],
+    candidate: Candidate,
+    anonymizer: Anonymizer,
+    benchmark: dict | None,
+    sql: str | None,
+) -> str:
+    anon_table = anonymizer.table_token(candidate.table) if candidate.table else "table_target"
+    anon_cols = [anonymizer.column_token(c) for c in candidate.columns]
+    anon_sql = anonymizer.anonymize_query(sql) if sql else ""
+    anon_reason_text = anonymizer.anonymize_query(candidate.reason) if candidate.reason else ""
+    anon_ddl = anonymizer.anonymize_query(candidate.sql) if candidate.sql else ""
+    anon_rewrite = anonymizer.anonymize_query(candidate.rewritten_sql) if candidate.rewritten_sql else ""
+
+    improvement = benchmark.get("improvement_percent") if benchmark else None
+    status = (benchmark or {}).get("validation_status") or "not_benchmarked"
+    imp_str = f"{improvement:.1f}% measured speedup" if improvement is not None else "plan-level estimate only"
+
+    bottleneck_lines = []
+    for item in bottlenecks[:4]:
+        relation = anonymizer.table_token(item.relation) if item.relation else "unknown_relation"
+        bottleneck_lines.append(
+            f"- {item.severity} {item.type} on {item.node} / {relation}: {anonymizer.anonymize_query(item.reason)}"
+        )
+
+    prompt = (
+        "You are a PostgreSQL performance specialist. Write a unique 4-6 sentence explanation "
+        "for a DBA about THIS specific query and intervention. Do not reuse a generic template. "
+        "Never invent table or column names other than the tokens provided.\n\n"
+        f"Query id: {query_id}\n"
+        f"Anonymized SQL:\n{anon_sql or '(not provided)'}\n\n"
+        f"Action type: {candidate.type}\n"
+        f"Target table token: {anon_table}\n"
+        f"Target column tokens: {', '.join(anon_cols) or '(none)'}\n"
+        f"Candidate reason: {anon_reason_text or '(none)'}\n"
+        f"Proposed DDL: {anon_ddl or '(none)'}\n"
+        f"Rewritten SQL: {anon_rewrite or '(none)'}\n"
+        f"Sandbox status: {status}; {imp_str}\n"
+        f"Detected bottlenecks:\n{chr(10).join(bottleneck_lines) or '- none classified'}\n\n"
+        "Explain why this query is slow, why this action helps, and the write/storage trade-off. "
+        "Use the tokenized identifiers exactly as given."
+    )
+    return prompt
 
 
 def _explain_with_gemini(
@@ -14,51 +123,69 @@ def _explain_with_gemini(
     candidate: Candidate,
     anonymizer: Anonymizer,
     benchmark: dict | None,
-) -> str | None:
-    import os
-    import logging
-
-    logger = logging.getLogger("optimizer.explainer")
-    settings = get_settings()
-    api_key = (settings.gemini_api_key or os.environ.get("GEMINI_API_KEY") or "").strip()
+    sql: str | None = None,
+) -> tuple[str | None, str | None, str | None]:
+    """Return (text, error, model_used)."""
+    api_key = _resolve_api_key()
     if not api_key:
-        return None
+        return None, "Gemini API key is not configured", None
+
     try:
         import httpx
-
-        # Obfuscated / tokenized prompt: ZERO raw table names, column names, or literals are sent to Gemini!
-        anon_table = anonymizer.table_token(candidate.table) if candidate.table else "table_target"
-        anon_cols = [anonymizer.column_token(c) for c in candidate.columns]
-        improvement = benchmark.get("improvement_percent") if benchmark else None
-        imp_str = f"{improvement:.1f}% measured speedup" if improvement is not None else "analyzed plan optimization"
-
-        prompt = (
-            f"You are a PostgreSQL database optimization AI. "
-            f"Explain the following database performance intervention in 3-4 concise sentences for a DBA:\n"
-            f"- Action Type: {candidate.type}\n"
-            f"- Target Table: {anon_table}\n"
-            f"- Target Columns: {', '.join(anon_cols)}\n"
-            f"- Measured Speedup: {imp_str}\n"
-            f"- Detected Bottlenecks: {', '.join(b.type for b in bottlenecks[:2])}\n"
-            f"Explain why this intervention resolves the bottleneck and what write/storage overhead trade-offs to expect. "
-            f"Use the tokenized table and column identifiers exactly as provided."
-        )
-
-        model = settings.gemini_model or "gemini-1.5-flash"
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-        res = httpx.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=12.0)
-        if res.status_code == 200:
-            data = res.json()
-            candidates_list = data.get("candidates", [])
-            if candidates_list and "content" in candidates_list[0]:
-                raw_text = candidates_list[0]["content"]["parts"][0]["text"].strip()
-                # Reverse-map / re-hash Gemini's tokenized response back to the user's real schema
-                return anonymizer.deanonymize_text(raw_text)
-        else:
-            logger.warning("Gemini API returned status %s: %s", res.status_code, res.text[:200])
     except Exception as exc:
-        logger.warning("Gemini API call failed: %s", exc)
-    return None
+        return None, f"httpx is unavailable: {exc}", None
+
+    prompt = _build_prompt(query_id, bottlenecks, candidate, anonymizer, benchmark, sql)
+    last_error = "Gemini request failed"
+    contents = [{"role": "user", "parts": [{"text": prompt}]}]
+    payloads = [
+        {
+            "contents": contents,
+            "generationConfig": {"temperature": 0.7, "maxOutputTokens": 640},
+        },
+        {"contents": contents},
+    ]
+
+    for model in _model_candidates():
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        for payload in payloads:
+            try:
+                res = httpx.post(
+                    url,
+                    headers={
+                        "x-goog-api-key": api_key,
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                    timeout=20.0,
+                )
+            except Exception as exc:
+                last_error = f"Gemini request error for {model}: {exc}"
+                logger.warning(last_error)
+                break
+
+            if res.status_code == 200:
+                try:
+                    text = _extract_gemini_text(res.json())
+                except Exception as exc:
+                    last_error = f"Could not parse Gemini response: {exc}"
+                    logger.warning(last_error)
+                    break
+                if text:
+                    return anonymizer.deanonymize_text(text), None, model
+                last_error = f"Gemini model {model} returned an empty explanation"
+                break
+
+            body = (res.text or "")[:240]
+            last_error = f"Gemini API status {res.status_code} for {model}: {body}"
+            logger.warning(last_error)
+            if res.status_code == 400:
+                continue
+            if res.status_code != 404:
+                return None, last_error, None
+            break
+
+    return None, last_error, None
 
 
 def explain_recommendation(
@@ -67,6 +194,7 @@ def explain_recommendation(
     candidate: Candidate,
     anonymizer: Anonymizer | None = None,
     benchmark: dict | None = None,
+    sql: str | None = None,
 ) -> dict[str, Any]:
     anon = anonymizer or Anonymizer()
     top = bottlenecks[0] if bottlenecks else None
@@ -135,10 +263,12 @@ Sources:
 """
 
     engine = "deterministic_gnn_local"
-    gemini_explanation = _explain_with_gemini(query_id, bottlenecks, candidate, anon, benchmark)
+    gemini_explanation, gemini_error, gemini_model = _explain_with_gemini(
+        query_id, bottlenecks, candidate, anon, benchmark, sql
+    )
     if gemini_explanation:
         final_text = gemini_explanation
-        engine = f"gemini ({get_settings().gemini_model}) via zero-data privacy bridge"
+        engine = f"gemini ({gemini_model}) via zero-data privacy bridge"
     else:
         final_text = default_text.strip()
 
@@ -151,6 +281,7 @@ Sources:
         "evidence": [b.to_dict() for b in bottlenecks],
         "text": final_text,
         "engine": engine,
+        "gemini_error": gemini_error,
     }
     if anonymizer:
         payload["anonymized_for_ai"] = {
@@ -158,5 +289,6 @@ Sources:
             "candidate_type": candidate.type,
             "columns": [anonymizer.column_token(c) for c in candidate.columns],
             "table": anonymizer.table_token(candidate.table) if candidate.table else None,
+            "sql": anonymizer.anonymize_query(sql) if sql else None,
         }
     return payload

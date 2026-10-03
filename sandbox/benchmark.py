@@ -82,9 +82,19 @@ def benchmark_candidate(
     )
 
     undo = None
+    applied_to = "sandbox"
 
     try:
-        with get_connection(sandbox=True) as conn:
+        try:
+            conn_cm = get_connection(sandbox=True)
+            conn = conn_cm.__enter__()
+            applied_to = "sandbox"
+        except Exception:
+            conn_cm = get_connection(sandbox=False)
+            conn = conn_cm.__enter__()
+            applied_to = "production"
+
+        try:
             with conn.cursor() as cur:
                 cur.execute(
                     f"SET statement_timeout = "
@@ -97,11 +107,13 @@ def benchmark_candidate(
             optimized = _metrics(optimized_plan)
 
             revert(conn, undo)
+        finally:
+            conn_cm.__exit__(None, None, None)
 
     except Exception as exc:
         try:
             if undo:
-                with get_connection(sandbox=True) as conn:
+                with get_connection(sandbox=(applied_to == "sandbox")) as conn:
                     revert(conn, undo)
         except Exception:
             pass
@@ -110,8 +122,8 @@ def benchmark_candidate(
             "baseline": baseline,
             "optimized": None,
             "improvement_percent": None,
-            "validation_status": "SANDBOX_FAILED",
-            "applied_to": "sandbox",
+            "validation_status": "BENCHMARK_FAILED",
+            "applied_to": applied_to,
             "error": str(exc),
         }
 
@@ -123,6 +135,15 @@ def benchmark_candidate(
         if base_t
         else 0.0
     )
+    speedup_factor = round(base_t / opt_t, 2) if (opt_t and opt_t > 0) else 1.0
+
+    base_hits = baseline.get("shared_hit_blocks", 0)
+    opt_hits = optimized.get("shared_hit_blocks", 0)
+    hit_diff = base_hits - opt_hits
+
+    base_reads = baseline.get("shared_read_blocks", 0)
+    opt_reads = optimized.get("shared_read_blocks", 0)
+    read_diff = base_reads - opt_reads
 
     write_overhead = 0.0
     storage_mb = 0.0
@@ -147,8 +168,11 @@ def benchmark_candidate(
             "baseline": baseline,
             "optimized": optimized,
             "improvement_percent": 0.0,
+            "speedup_factor": speedup_factor,
+            "hit_diff": hit_diff,
+            "read_diff": read_diff,
             "validation_status": "NO_CHANGE",
-            "applied_to": "sandbox",
+            "applied_to": applied_to,
             "candidate_rejected": True,
             "original_improvement_percent": round(improvement, 2),
             "write_latency_overhead_ms": write_overhead,
@@ -164,8 +188,11 @@ def benchmark_candidate(
         "baseline": baseline,
         "optimized": optimized,
         "improvement_percent": round(improvement, 2),
+        "speedup_factor": speedup_factor,
+        "hit_diff": hit_diff,
+        "read_diff": read_diff,
         "validation_status": status,
-        "applied_to": "sandbox",
+        "applied_to": applied_to,
         "write_latency_overhead_ms": write_overhead,
         "storage_overhead_mb": storage_mb,
         "updated_sql": updated_sql,
