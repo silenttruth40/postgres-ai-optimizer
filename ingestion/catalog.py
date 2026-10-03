@@ -15,27 +15,21 @@ class DemoQuery:
 DEMO_QUERIES: dict[str, DemoQuery] = {
     "Q001": DemoQuery(
         query_id="Q001",
-        title="Recent customer order totals",
-        description="Join + date filter + aggregation without a supporting composite index.",
+        title="Orders by customer and date",
+        description="Filtered order lookup without a supporting composite index.",
         problem_class="MISSING_INDEX",
         sql="""
-SELECT
-    c.customer_id,
-    c.name,
-    COUNT(o.order_id) AS order_count,
-    SUM(o.amount) AS total_amount
-FROM customers c
-JOIN orders o
-    ON c.customer_id = o.customer_id
-WHERE o.created_at >= CURRENT_DATE - INTERVAL '30 days'
-GROUP BY c.customer_id, c.name
-ORDER BY total_amount DESC
+SELECT *
+FROM orders
+WHERE customer_id = 42
+  AND created_at >= CURRENT_DATE - INTERVAL '30 days'
+ORDER BY created_at DESC
 """.strip(),
     ),
     "Q002": DemoQuery(
         query_id="Q002",
         title="Customer lookup by email",
-        description="Equality filter on an unindexed PII column; used for the privacy demo.",
+        description="Equality filter on a potentially unindexed customer email column; also demonstrates privacy anonymization.",
         problem_class="SEQ_SCAN",
         sql="""
 SELECT customer_id, name, email
@@ -45,22 +39,23 @@ WHERE email = 'user42@example.com'
     ),
     "Q003": DemoQuery(
         query_id="Q003",
-        title="Recent transaction leaders",
-        description="Aggregation and sort over a large unindexed timestamp range.",
-        problem_class="AGGREGATE_SORT",
+        title="Customers with many orders",
+        description="Correlated subquery that can produce repeated work across customer rows.",
+        problem_class="REWRITE",
         sql="""
-SELECT customer_id, COUNT(*) AS txn_count, SUM(amount) AS total
-FROM transactions
-WHERE created_at >= CURRENT_DATE - INTERVAL '14 days'
-GROUP BY customer_id
-ORDER BY total DESC
-LIMIT 50
+SELECT c.id, c.name
+FROM customers c
+WHERE (
+    SELECT COUNT(*)
+    FROM orders o
+    WHERE o.customer_id = c.id
+) > 10
 """.strip(),
     ),
     "Q004": DemoQuery(
         query_id="Q004",
-        title="Open orders dump",
-        description="SELECT * with a status filter and a large sort.",
+        title="Open orders sorted by amount",
+        description="SELECT * with a status filter followed by a potentially expensive multi-column sort.",
         problem_class="SELECT_STAR_SORT",
         sql="""
 SELECT *
@@ -72,7 +67,7 @@ ORDER BY created_at DESC, amount DESC
     "Q005": DemoQuery(
         query_id="Q005",
         title="Customers with large orders",
-        description="Correlated EXISTS subquery that can be rewritten as a semi-join.",
+        description="Correlated EXISTS subquery that can be analyzed for rewrite and join optimization.",
         problem_class="REWRITE",
         sql="""
 SELECT c.customer_id, c.name
@@ -88,13 +83,15 @@ WHERE EXISTS (
     "Q006": DemoQuery(
         query_id="Q006",
         title="Recent electronics line items",
-        description="Multi-join without indexes on join and filter keys.",
+        description="Multi-table join with date and category filters that can benefit from supporting indexes.",
         problem_class="JOIN",
         sql="""
 SELECT o.order_id, p.name, oi.quantity, oi.unit_price
 FROM orders o
-JOIN order_items oi ON oi.order_id = o.order_id
-JOIN products p ON p.product_id = oi.product_id
+JOIN order_items oi
+    ON oi.order_id = o.order_id
+JOIN products p
+    ON p.product_id = oi.product_id
 WHERE o.created_at >= CURRENT_DATE - INTERVAL '7 days'
   AND p.category = 'electronics'
 """.strip(),
@@ -102,7 +99,10 @@ WHERE o.created_at >= CURRENT_DATE - INTERVAL '7 days'
 }
 
 
-def get_demo_query(query_id: str, sql: str | None = None) -> DemoQuery:
+def get_demo_query(
+    query_id: str,
+    sql: str | None = None,
+) -> DemoQuery:
     if sql:
         base = DEMO_QUERIES.get(query_id)
         return DemoQuery(
@@ -112,7 +112,11 @@ def get_demo_query(query_id: str, sql: str | None = None) -> DemoQuery:
             problem_class=base.problem_class if base else "ADHOC",
             sql=sql.strip(),
         )
+
     if query_id not in DEMO_QUERIES:
         known = ", ".join(DEMO_QUERIES)
-        raise KeyError(f"Unknown query_id {query_id}. Known: {known}")
+        raise KeyError(
+            f"Unknown query_id {query_id}. Known: {known}"
+        )
+
     return DEMO_QUERIES[query_id]
