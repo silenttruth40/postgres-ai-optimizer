@@ -1,0 +1,6 @@
+# Optional heavy ML stack. The prototype runs without these packages.
+# Heuristic GNN/RL fallbacks are used when imports fail.
+torch>=2.2.0
+torch-geometric>=2.5.0
+stable-baselines3>=2.3.0
+gymnasium>=0.29.0
