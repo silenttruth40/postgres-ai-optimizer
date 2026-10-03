@@ -43,12 +43,12 @@ WHERE email = 'user42@example.com'
         description="Correlated subquery that can produce repeated work across customer rows.",
         problem_class="REWRITE",
         sql="""
-SELECT c.id, c.name
+SELECT c.customer_id, c.name
 FROM customers c
 WHERE (
     SELECT COUNT(*)
     FROM orders o
-    WHERE o.customer_id = c.id
+    WHERE o.customer_id = c.customer_id
 ) > 10
 """.strip(),
     ),
