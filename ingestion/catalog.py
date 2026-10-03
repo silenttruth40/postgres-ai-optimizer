@@ -23,7 +23,7 @@ SELECT *
 FROM orders
 WHERE customer_id = 42
   AND created_at >= CURRENT_DATE - INTERVAL '30 days'
-ORDER BY created_at DESC;
+ORDER BY created_at DESC
 """.strip(),
     ),
     "Q002": DemoQuery(
@@ -34,7 +34,7 @@ ORDER BY created_at DESC;
         sql="""
 SELECT customer_id, name, email
 FROM customers
-WHERE email = 'user42@example.com';
+WHERE email = 'user42@example.com'
 """.strip(),
     ),
     "Q003": DemoQuery(
@@ -49,7 +49,7 @@ WHERE (
     SELECT COUNT(*)
     FROM orders o
     WHERE o.customer_id = c.customer_id
-) > 10;
+) > 10
 """.strip(),
     ),
     "Q004": DemoQuery(
@@ -61,7 +61,7 @@ WHERE (
 SELECT *
 FROM orders
 WHERE status = 'open'
-ORDER BY created_at DESC, amount DESC;
+ORDER BY created_at DESC, amount DESC
 """.strip(),
     ),
     "Q005": DemoQuery(
@@ -70,14 +70,14 @@ ORDER BY created_at DESC, amount DESC;
         description="Correlated EXISTS subquery that can be analyzed for rewrite and join optimization.",
         problem_class="REWRITE",
         sql="""
-SSELECT c.customer_id, c.name
+SELECT c.customer_id, c.name
 FROM customers c
 WHERE EXISTS (
     SELECT 1
     FROM orders o
     WHERE o.customer_id = c.customer_id
       AND o.amount > 500
-);
+)
 """.strip(),
     ),
     "Q006": DemoQuery(
@@ -93,7 +93,9 @@ JOIN order_items oi
 JOIN products p
     ON p.product_id = oi.product_id
 WHERE o.created_at >= CURRENT_DATE - INTERVAL '7 days'
-  AND p.category = 'electronics';
+  AND p.category = 'electronics'
+""".strip(),
+    ),
 }
 
 
@@ -113,8 +115,6 @@ def get_demo_query(
 
     if query_id not in DEMO_QUERIES:
         known = ", ".join(DEMO_QUERIES)
-        raise KeyError(
-            f"Unknown query_id {query_id}. Known: {known}"
-        )
+        raise KeyError(f"Unknown query_id {query_id}. Known: {known}")
 
     return DEMO_QUERIES[query_id]
