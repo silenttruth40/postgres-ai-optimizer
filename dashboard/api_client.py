@@ -35,16 +35,24 @@ class OptimizerClient:
     def queries(self) -> list:
         return self._request("GET", "/queries")
 
-    def analyze(self, query_id: str) -> dict:
-        return self._request("POST", "/analyze", {"query_id": query_id})
+    def analyze(self, query_id: str, sql: str | None = None) -> dict:
+        payload = {"query_id": query_id}
+        if sql:
+            payload["sql"] = sql
+        return self._request("POST", "/analyze", payload)
 
-    def recommend(self, query_id: str) -> dict:
-        return self._request("POST", "/recommend", {"query_id": query_id})
+    def recommend(self, query_id: str, sql: str | None = None) -> dict:
+        payload = {"query_id": query_id}
+        if sql:
+            payload["sql"] = sql
+        return self._request("POST", "/recommend", payload)
 
-    def benchmark(self, query_id: str, candidate_id: str | None = None) -> dict:
+    def benchmark(self, query_id: str, candidate_id: str | None = None, sql: str | None = None) -> dict:
         payload = {"query_id": query_id}
         if candidate_id:
             payload["candidate_id"] = candidate_id
+        if sql:
+            payload["sql"] = sql
         return self._request("POST", "/benchmark", payload)
 
     def results(self, query_id: str) -> dict:
@@ -55,3 +63,4 @@ class OptimizerClient:
 
     def privacy_demo(self) -> dict:
         return self._request("GET", "/privacy/demo")
+

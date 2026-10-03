@@ -73,6 +73,7 @@ def analyze_query(query_id: str, sql: str | None = None) -> dict[str, Any]:
         "candidates": [c.to_dict() for c in ranked],
         "gnn": gnn,
         "privacy": anonymizer.stats(),
+        "privacy_trace": anonymizer.privacy_verification_trace(query.sql),
         "postgres_ok": ping(False),
         "sandbox_ok": ping(True),
     }
@@ -119,6 +120,9 @@ def benchmark_query(query_id: str, candidate_id: str | None = None, sql: str | N
         "improvement_percent": result.get("improvement_percent"),
         "validation_status": result.get("validation_status"),
         "applied_to": result.get("applied_to"),
+        "write_latency_overhead_ms": result.get("write_latency_overhead_ms", 0.0),
+        "storage_overhead_mb": result.get("storage_overhead_mb", 0.0),
+        "updated_sql": result.get("updated_sql") or candidate.rewritten_sql or candidate.sql,
         "error": result.get("error"),
         "explanation": explanation,
     }
@@ -126,6 +130,7 @@ def benchmark_query(query_id: str, candidate_id: str | None = None, sql: str | N
     history.append(payload)
     _STORE[query_id]["latest_benchmark"] = payload
     return payload
+
 
 
 def results_for(query_id: str) -> dict[str, Any]:

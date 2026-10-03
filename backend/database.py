@@ -3,15 +3,22 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import Iterator
 
-import psycopg
-from psycopg.rows import dict_row
+try:
+    import psycopg
+    from psycopg.rows import dict_row
+except Exception:
+    psycopg = None
+    dict_row = None
 
 from backend.config import Settings, get_settings
 
 
-def connect(settings: Settings | None = None, sandbox: bool = False) -> psycopg.Connection:
+def connect(settings: Settings | None = None, sandbox: bool = False):
+    if psycopg is None:
+        raise RuntimeError("PostgreSQL driver (psycopg) is not available on this platform")
     settings = settings or get_settings()
     return psycopg.connect(settings.dsn(sandbox=sandbox), row_factory=dict_row, autocommit=True)
+
 
 
 @contextmanager

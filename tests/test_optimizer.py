@@ -37,5 +37,17 @@ def test_duplicate_indexes_are_skipped():
         if c.table == "orders" and tuple(c.columns) == ("created_at", "customer_id")
     ]
     assert dupes == [] or all(c.type != "CREATE_COMPOSITE_INDEX" for c in dupes) or True
-    # The advisor must not emit the exact existing index.
     assert not any(tuple(c.columns) == ("created_at", "customer_id") and c.table == "orders" for c in candidates)
+
+
+def test_gnn_execution_tree_inference():
+    from gnn.inference import analyze_plan_graph
+    plan = parse_explain_json(SAMPLE_PLAN)
+    gnn_out = analyze_plan_graph(plan)
+    assert gnn_out["source"] == "GNN"
+    assert "explanation" in gnn_out
+    assert gnn_out["attention_percent"] > 0
+    assert len(gnn_out["nodes"]) > 0
+    assert len(gnn_out["edges"]) > 0
+    assert gnn_out["bottleneck_node"]["node_type"] is not None
+

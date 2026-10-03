@@ -1,8 +1,9 @@
-from __future__ import annotations
-
 from typing import Any
 
-import psycopg
+try:
+    import psycopg
+except Exception:
+    psycopg = None
 
 from ingestion.query_parser import parse_explain_json
 
@@ -32,8 +33,9 @@ def is_safe_select(sql: str) -> bool:
     return lowered.startswith("select") or lowered.startswith("with")
 
 
-def explain_analyze(conn: psycopg.Connection, sql: str) -> dict[str, Any]:
+def explain_analyze(conn: Any, sql: str) -> dict[str, Any]:
     if not is_safe_select(sql):
+
         raise ValueError("Only read-only SELECT/CTE statements can be explained")
     with conn.cursor() as cur:
         cur.execute(f"EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {sql}")
@@ -44,6 +46,7 @@ def explain_analyze(conn: psycopg.Connection, sql: str) -> dict[str, Any]:
     return payload
 
 
-def collect_plan(conn: psycopg.Connection, sql: str):
+def collect_plan(conn: Any, sql: str):
     payload = explain_analyze(conn, sql)
     return parse_explain_json(payload)
+

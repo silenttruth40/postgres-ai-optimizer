@@ -59,3 +59,23 @@ def test_benchmark_endpoint_mocked(monkeypatch):
     response = client.post("/benchmark", json={"query_id": "Q001", "candidate_id": "C001"})
     assert response.status_code == 200
     assert response.json()["validation_status"] == "VALIDATED"
+
+
+def test_custom_query_analysis_endpoint(monkeypatch):
+    custom_sql = "SELECT customer_id, name FROM customers WHERE customer_id = 99"
+    sample = {
+        "query_id": "custom",
+        "sql": custom_sql,
+        "anonymized_sql": "SELECT column_001, column_002 FROM table_001 WHERE column_001 = <REDACTED>",
+        "bottlenecks": [],
+        "candidates": [],
+        "gnn": {"source": "GNN"},
+    }
+    monkeypatch.setattr("backend.routes.analysis.analyze_query", lambda query_id, sql=None: sample)
+    response = client.post("/analyze", json={"query_id": "custom", "sql": custom_sql})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["query_id"] == "custom"
+    assert data["sql"] == custom_sql
+    assert "column_001" in data["anonymized_sql"]
+

@@ -1,11 +1,13 @@
-from __future__ import annotations
-
 from typing import Any
 
-import psycopg
+try:
+    import psycopg
+except Exception:
+    psycopg = None
 
 from backend.database import get_connection
 from privacy.hashing import is_safe_identifier
+
 
 ALLOWED_TABLES = {"customers", "orders", "products", "transactions", "order_items"}
 ALLOWED_COLUMNS = {
@@ -30,7 +32,7 @@ ALLOWED_COLUMNS = {
 }
 
 
-def list_indexes(conn: psycopg.Connection) -> list[tuple[str, tuple[str, ...]]]:
+def list_indexes(conn: Any) -> list[tuple[str, tuple[str, ...]]]:
     sql = """
     SELECT
         t.relname AS table_name,
@@ -56,28 +58,44 @@ def list_indexes(conn: psycopg.Connection) -> list[tuple[str, tuple[str, ...]]]:
     return out
 
 
+def register_custom_table(table: str, columns: list[str] | None = None) -> None:
+    """Allow custom user tables and columns while blocking system catalogs."""
+    if not table.lower().startswith(("pg_", "information_schema")) and is_safe_identifier(table):
+        ALLOWED_TABLES.add(table.lower())
+        if columns:
+            for c in columns:
+                if is_safe_identifier(c):
+                    ALLOWED_COLUMNS.add(c.lower())
+
+
 def validate_candidate(candidate: dict[str, Any]) -> None:
     kind = candidate.get("type")
     if kind in {"CREATE_INDEX", "CREATE_COMPOSITE_INDEX"}:
-        table = candidate.get("table") or ""
-        columns = candidate.get("columns") or []
-        if table not in ALLOWED_TABLES or not is_safe_identifier(table):
-            raise ValueError(f"Refusing index on unknown table {table}")
+        table = (candidate.get("table") or "").lower()
+        columns = [c.lower() for c in (candidate.get("columns") or [])]
+        if (
+            not table
+            or table.startswith(("pg_", "information_schema"))
+            or not is_safe_identifier(table)
+            or table not in ALLOWED_TABLES
+        ):
+            raise ValueError(f"Refusing index on unknown or system table {table}")
         if not columns or not all(c in ALLOWED_COLUMNS and is_safe_identifier(c) for c in columns):
-            raise ValueError("Refusing index with invalid columns")
+            raise ValueError("Refusing index with unknown or unsafe columns")
     if kind == "UPDATE_STATISTICS":
-        table = candidate.get("table") or ""
-        if table not in ALLOWED_TABLES:
-            raise ValueError("Refusing ANALYZE on unknown table")
+        table = (candidate.get("table") or "").lower()
+        if not table or table not in ALLOWED_TABLES:
+            raise ValueError(f"Refusing ANALYZE on unknown or invalid table {table}")
     if kind == "REWRITE_QUERY":
         sql = (candidate.get("rewritten_sql") or "").strip().lower()
-        if not sql.startswith("select"):
-            raise ValueError("Rewrite must be a SELECT")
+        if not sql.startswith("select") and not sql.startswith("with"):
+            raise ValueError("Rewrite must be a SELECT or CTE statement")
     if kind == "PARTITION":
         raise ValueError("Partitioning is not auto-applied")
 
 
-def apply_candidate(conn: psycopg.Connection, candidate: dict[str, Any]) -> str | None:
+
+def apply_candidate(conn: Any, candidate: dict[str, Any]) -> str | None:
     kind = candidate.get("type")
     if kind == "NO_CHANGE":
         return None
@@ -110,8 +128,10 @@ def apply_candidate(conn: psycopg.Connection, candidate: dict[str, Any]) -> str 
     return undo
 
 
-def revert(conn: psycopg.Connection, undo_sql: str | None) -> None:
+def revert(conn: Any, undo_sql: str | None) -> None:
     if not undo_sql:
         return
     with conn.cursor() as cur:
+        cur.execute(undo_sql)
+
         cur.execute(undo_sql)

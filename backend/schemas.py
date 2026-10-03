@@ -73,3 +73,7 @@ class BenchmarkOut(BaseModel):
     validation_status: str
     applied_to: str = "sandbox"
     error: str | None = None
+    write_latency_overhead_ms: float | None = None
+    storage_overhead_mb: float | None = None
+    updated_sql: str | None = None
+

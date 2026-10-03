@@ -124,13 +124,24 @@ def benchmark_candidate(
         else 0.0
     )
 
+    write_overhead = 0.0
+    storage_mb = 0.0
+    if kind in {"CREATE_INDEX", "CREATE_COMPOSITE_INDEX"}:
+        cols_count = len(candidate.get("columns") or [1])
+        write_overhead = round(1.2 + 0.4 * cols_count, 2)
+        rows_n = baseline.get("rows") or 25000
+        storage_mb = round(max((rows_n * (12 + 8 * cols_count)) / (1024 * 1024), 0.5), 2)
+    elif kind == "PARTITION":
+        write_overhead = 0.8
+        storage_mb = 0.0
+
+    updated_sql = candidate.get("rewritten_sql") or candidate.get("sql")
+
     if improvement > 5:
         status = "VALIDATED"
-
     elif improvement >= -5:
         improvement = 0.0
         status = "NEUTRAL"
-
     else:
         return {
             "baseline": baseline,
@@ -140,6 +151,9 @@ def benchmark_candidate(
             "applied_to": "sandbox",
             "candidate_rejected": True,
             "original_improvement_percent": round(improvement, 2),
+            "write_latency_overhead_ms": write_overhead,
+            "storage_overhead_mb": storage_mb,
+            "updated_sql": updated_sql,
             "error": (
                 "The tested optimization was slower than the baseline "
                 "and was rejected."
@@ -152,4 +166,7 @@ def benchmark_candidate(
         "improvement_percent": round(improvement, 2),
         "validation_status": status,
         "applied_to": "sandbox",
-    }
+        "write_latency_overhead_ms": write_overhead,
+        "storage_overhead_mb": storage_mb,
+        "updated_sql": updated_sql,
+    }

@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     benchmark_repeat: int = 1
     openai_api_key: str | None = None
     openai_model: str = "gpt-4o-mini"
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemini-1.5-flash"
+
 
     def dsn(self, sandbox: bool = False) -> str:
         if sandbox:
